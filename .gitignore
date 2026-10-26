@@ -1,0 +1,8 @@
+# dev scratch (repos, snapshots, translation staging)
+.dev/
+__pycache__/
+*.bak
+.DS_Store
+
+# local-only handoff notes
+HANDOFF.md
