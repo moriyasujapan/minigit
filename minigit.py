@@ -1339,8 +1339,10 @@ def commit_files(repo, base_sha, branch, old, path, text, msg, user):
 
 # ---------------------------------------------------------------- ブランチ保護
 def set_update_hook(repo):
-    """保護設定時 (およびサーバー起動時) に update フックを作る。push 時に git が sh で実行し、
-    保護ブランチへの force push / 削除を拒否する。Web からの FF コミット・PR マージは git 経由でなく許可"""
+    """保護設定時とサーバー起動時 (全リポジトリ) に update フックを作る。移動/コピーされた
+    リポジトリの古い絶対パスフックも起動時に自己修復する。push 時に git が sh で実行し、
+    保護ブランチへの force push / 削除を拒否する。Web からの FF コミット・PR マージは git 経由でなく許可。
+    既存と同じ内容なら書き込まない (冪等)"""
     hdir = os.path.join(repo_path(repo), "hooks")
     os.makedirs(hdir, exist_ok=True)
     path = os.path.join(hdir, "update")
@@ -1348,9 +1350,15 @@ def set_update_hook(repo):
            f"export MINIGIT_ROOT={shlex.quote(ROOT)} MINIGIT_GIT={shlex.quote(GIT)}\n"
            f"exec {shlex.quote(sys.executable)} {shlex.quote(os.path.abspath(__file__))} "
            f"hook-update {shlex.quote(repo)} \"$1\" \"$2\" \"$3\"\n")
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write(txt)
-    os.chmod(path, 0o755)
+    try:
+        with open(path, encoding="utf-8") as f:
+            same = f.read() == txt
+    except OSError:
+        same = False
+    if not same:
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(txt)
+        os.chmod(path, 0o755)
 
 
 def hook_update(repo, ref, old, new):
@@ -2356,9 +2364,20 @@ if __name__ == "__main__":
     os.makedirs(ROOT, exist_ok=True)
     db().close()
     with db() as c:
-        for r in c.execute("SELECT DISTINCT repo FROM protect"):
-            if os.path.isdir(repo_path(r["repo"])):
-                set_update_hook(r["repo"])
+        prot = {r["repo"] for r in c.execute("SELECT DISTINCT repo FROM protect")}
+    for name in repos():
+        if not os.path.isdir(repo_path(name)):
+            continue
+        if name in prot:
+            set_update_hook(name)
+            continue
+        hp = os.path.join(repo_path(name), "hooks", "update")
+        try:  # 非保護のリポジトリに残った minigit 製フック (無保護でも python 起動になる) を除去
+            with open(hp, encoding="utf-8", errors="replace") as f:
+                if "MINIGIT_ROOT=" in f.read():
+                    os.remove(hp)
+        except OSError:
+            pass
     first = init_users()
     if first:
         print(first)
